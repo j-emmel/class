@@ -64,8 +64,12 @@ def limit_vl(r):
 def limit_bj(r):
     return numpy.clip(numpy.minimum(4*r, 4*(1-r)), 0, 1)
 
-def fvsolve2system(riemann, U0, a=-1, b=1, n=20, tfinal=1, limit=limit_minmod, args = ()):
+def fvsolve2system(riemann, U0, a=-1, b=1, n=20, tfinal=1, limit=limit_minmod, t_step = None, args = ()):
     h = (b - a)/n
+    
+    if t_step is None:
+        t_step = h/10
+    
     x = numpy.linspace(a+h/2, b-h/2, n) # Element midpoints (centroids)
     U0x = U0(x)
     Ushape = U0x.shape
@@ -79,5 +83,5 @@ def fvsolve2system(riemann, U0, a=-1, b=1, n=20, tfinal=1, limit=limit_minmod, a
         g = limit(r) * jump / (2*h)
         fluxL = riemann(U[:,idxL] + g[:,idxL] * h/2, U - g * h/2, *args)
         return (fluxL - fluxL[:,idxR]).flatten() / h
-    hist = ode_rkexplicit(rhs, U0x.flatten(), h=h/5, tfinal=tfinal)
+    hist = ode_rkexplicit(rhs, U0x.flatten(), h=t_step, tfinal=tfinal)
     return x, [(t, U.reshape(Ushape)) for t, U in hist]
