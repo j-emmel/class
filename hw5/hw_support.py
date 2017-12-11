@@ -21,11 +21,19 @@ def fsolve_newton(F, J, u0, rtol=1e-10, maxit=50, verbose=False):
 
 
 class laplacian2:
+    """
+    Provides a Laplacian problem with multiple forcing funciton options ('1', '2', 'warp'), using manufactured solutions
+    """
     def __init__(self, k=1, exact='1'):
         self.k = k
         self.exact = getattr(self, 'exact_' + exact)
         self.forcing = getattr(self, 'forcing_' + exact)
     def form(self, x, u, Du):
+        """
+        Pair 1: f0, f1
+        Pair 2: derivative of f0 w/ respective to u and grad(u), 
+                derivative of f1 w/ respective to u and grad(u) 
+        """
         return (self.forcing(x), self.k*Du), ((0, 0), (0, self.k*numpy.eye(2)[None,:,:]))
     def exact_1(self, x):
         return x[:,0] + x[:,1]
@@ -46,13 +54,21 @@ class laplacian2:
 
 
 def fe2_geom(fe, mesh):
+    """
+    Returns
+    xq: values of physical coordinates at quadrature points
+    W: quadrature weights
+    dXdx: derivative of reference coordinates with respect to physical
+    """
     x, Erestrict = mesh.Erestrict(fe.p)
     nelem = len(Erestrict)
     Q = len(fe.w)
     B, D = fe.B, fe.D
     W = numpy.empty((nelem, Q))
     dXdx = numpy.empty((nelem, Q, 2, 2))
-    xq = numpy.empty((nelem, Q, 2))    
+    xq = numpy.empty((nelem, Q, 2))
+    
+    # Walk over all elements
     for e, E in enumerate(Erestrict):
         xE = x[E,:]
         xq[e] = B @ xE
@@ -62,73 +78,12 @@ def fe2_geom(fe, mesh):
         dXdx[e] = numpy.linalg.inv(dxdX)
     return xq, W, dXdx
 
-
-def fe2_solve(fe, mesh, form, dirichlet={}, spy=False):
-    x, Erestrict = mesh.Erestrict(fe.p)
-    Frestrict = mesh.Frestrict(fe.p)
-    Ndof = len(x)
-    B, D = fe.B, fe.D
-    xq, W, dXdx = fe2_geom(fe, mesh)
-    dirichletidx = []
-    bcmask = numpy.zeros(Ndof, dtype=bool)
-    for label, func in dirichlet.items():
-        indices = Frestrict[mesh.boundary[label]].flatten()
-        dirichletidx.append((label, indices, func))
-        bcmask[indices] = True
-    
-    def project_dirichlet(u): # Affine projector into space satisfying Dirichlet BC
-        ubc = u.copy()
-        for label, indices, func in dirichletidx:
-            ubc[indices] = func(x[indices])
-        return ubc
-
-    def residual(u):
-        ubc = project_dirichlet(u)
-        v = u - ubc
-        for e, E in enumerate(Erestrict):
-            uE = ubc[E]
-            uq = B @ uE
-            Dxuq = numpy.einsum('ixX,iX->ix', dXdx[e], D @ uE)
-            f, _ = form(xq[e], uq, Dxuq)
-            vE = B.T @ (W[e] * f[0]) + numpy.einsum('iXp,ixX,ix->p',
-                                                    D, dXdx[e], W[e,:,None] * f[1])
-            vE[bcmask[E]] = 0
-            v[E] += vE
-        return v
-
-    def jacobian(u):
-        ubc = project_dirichlet(u)
-        ai = []
-        aj = []
-        aa = []
-        for e, E in enumerate(Erestrict):
-            uE = ubc[E]
-            Dx = numpy.einsum('ixX,iXp->ixp', dXdx[e], D)
-            _, df = form(xq[e], B @ uE, Dx @ uE)
-            Ae = (numpy.einsum('qi,q,qj->ij', B, W[e] * df[0][0], B)
-                  + numpy.einsum('qi,qy,qyj->ij', B, W[e,:,None] * df[0][1], Dx)
-                  + numpy.einsum('qxi,qx,qj->ij', Dx, W[e,:,None] * df[1][0], B)
-                  + numpy.einsum('qxi,qxy,qyj->ij', Dx, W[e,:,None,None] * df[1][1], Dx))
-            Ae[bcmask[E],:] = 0
-            Ae[:,bcmask[E]] = 0
-            ai += numpy.outer(E, numpy.ones_like(E)).flatten().tolist()
-            aj += numpy.outer(numpy.ones_like(E), E).flatten().tolist()
-            aa += Ae.flatten().tolist()
-        bcidx = numpy.where(bcmask)[0].tolist()
-        ai += bcidx
-        aj += bcidx
-        aa += numpy.ones_like(bcidx).tolist()
-        A = sp.csr_matrix((aa, (ai, aj)), shape=(Ndof,Ndof))
-        if spy:
-            pyplot.spy(A)
-        return A
-    
-    u0 = numpy.zeros(Ndof) # initial guess
-    u, nit = fsolve_newton(residual, jacobian, u0, verbose=True)
-    return x, u
-
-
 def tri_quad4():
+    """
+    Returns
+    q: coordinates on the reference triangle
+    w: quatrature weights
+    """
     q = numpy.array([[ -0.10810301816807,   -0.78379396366386  ],
                      [ -0.78379396366386,   -0.10810301816807  ],
                      [ -0.10810301816807,   -0.10810301816807  ],
@@ -145,6 +100,9 @@ def tri_quad4():
 
 
 class Mesh:
+    """
+    Mesh generator, supporting shapes 'circle,' 'rectangle,' and 'eyes.'
+    """
     def __init__(self, lcar=.5, shape='circle', reshape_boundary=False):
         import pygmsh
         geom = pygmsh.built_in.Geometry()
@@ -252,25 +210,39 @@ class Mesh:
             pyplot.plot(xFv[:,0], xFv[:,1], '.k')
         pyplot.legend()
 
-       
+
 class fe2tri:
     def __init__(self, p):
+        """
+        Params:
+          p:
+           = 1: use linears only, corners
+           = 2: use all functions, corners plus midpoints
+        
+        Ultimately sets B, D: nodal bases (values and derivatives)
+        """
         x1 = numpy.array([[-1, 1], [-1, -1], [1, -1]])
         x2 = numpy.array([[-1, 0], [0, -1], [0, 0]])
+
         if p == 1:
             x = x1
         elif p == 2:
             x = numpy.vstack([x1, x2])
+            
         self.p = p
         self.xref = x
         self.q, self.w = tri_quad4() # Could use fewer points for p==1
-        V, _ = self.prime(x)
-        Vinv = numpy.linalg.inv(V)
+        
+        V, _ = self.prime(x)        # evaluate prime basis at nodes
+        Vinv = numpy.linalg.inv(V)  # takes values at nodes, evaluates at prime basis
         Bprime, Dprime = self.prime(self.q)
         self.B = Bprime @ Vinv
         self.D = Dprime @ Vinv
 
     def prime(self, x):
+        """
+        Evaluates the prime basis at some set of points x.
+        """
         V = numpy.ones((len(x), len(self.xref)))
         dV = numpy.zeros((len(x), 2, len(self.xref)))
         V[:,1] = x[:,0]
@@ -287,26 +259,70 @@ class fe2tri:
             dV[:,1,4] = x[:,0]
             dV[:,1,5] = 2*x[:,1]
         return V, dV
+
     
-    def meshref(self):
-        # Mesh for plotting on reference element
-        x1 = numpy.linspace(-1, 1)
-        xx, yy = numpy.meshgrid(x1, x1)
-        for i,y in enumerate(yy):
-            xx[i] = numpy.linspace(-1, -y[0])
-        return numpy.vstack([xx.flatten(), yy.flatten()]).T
+def fe2_solve(fe, mesh, form, dirichlet={}, spy=False):
+    x, Erestrict = mesh.Erestrict(fe.p)
+    Frestrict = mesh.Frestrict(fe.p)
+    Ndof = len(x)
+    B, D = fe.B, fe.D
+    xq, W, dXdx = fe2_geom(fe, mesh)
+    dirichletidx = []
+    bcmask = numpy.zeros(Ndof, dtype=bool)
     
-    def plot(self):
-        pyplot.plot(self.xref[:,0], self.xref[:,1], 'o')
-        pyplot.plot(self.q[:,0], self.q[:,1], 's')
-        pyplot.triplot([-1, -1, 1], [1, -1, -1])
-        
-        X = self.meshref()
-        Vinv = numpy.linalg.inv(self.prime(self.xref)[0])
-        Bprime = self.prime(X)[0]
-        B = Bprime @ Vinv
-        pyplot.figure()
-        for i in range(6):
-            from matplotlib import cm
-            pyplot.subplot(2, 3, i+1)
-            pyplot.tricontourf(X[:,0], X[:,1], B[:,i], 30, cmap=cm.seismic, vmin=-1, vmax=1)
+    for label, func in dirichlet.items():
+        indices = Frestrict[mesh.boundary[label]].flatten()
+        dirichletidx.append((label, indices, func))
+        bcmask[indices] = True
+    
+    def project_dirichlet(u): # Affine projector into space satisfying Dirichlet BC
+        ubc = u.copy()
+        for label, indices, func in dirichletidx:
+            ubc[indices] = func(x[indices])
+        return ubc
+
+    def residual(u):
+        ubc = project_dirichlet(u)
+        v = u - ubc
+        for e, E in enumerate(Erestrict):
+            uE = ubc[E]
+            uq = B @ uE
+            Dxuq = numpy.einsum('ixX,iX->ix', dXdx[e], D @ uE)
+            f, _ = form(xq[e], uq, Dxuq)
+            vE = B.T @ (W[e] * f[0]) + numpy.einsum('iXp,ixX,ix->p',
+                                                    D, dXdx[e], W[e,:,None] * f[1])
+            vE[bcmask[E]] = 0
+            v[E] += vE
+        return v
+
+    def jacobian(u):
+        ubc = project_dirichlet(u)
+        ai = []
+        aj = []
+        aa = []
+        for e, E in enumerate(Erestrict):
+            uE = ubc[E]
+            Dx = numpy.einsum('ixX,iXp->ixp', dXdx[e], D)
+            _, df = form(xq[e], B @ uE, Dx @ uE)
+            Ae = (numpy.einsum('qi,q,qj->ij', B, W[e] * df[0][0], B)
+                  + numpy.einsum('qi,qy,qyj->ij', B, W[e,:,None] * df[0][1], Dx)
+                  + numpy.einsum('qxi,qx,qj->ij', Dx, W[e,:,None] * df[1][0], B)
+                  + numpy.einsum('qxi,qxy,qyj->ij', Dx, W[e,:,None,None] * df[1][1], Dx))
+            Ae[bcmask[E],:] = 0
+            Ae[:,bcmask[E]] = 0
+            ai += numpy.outer(E, numpy.ones_like(E)).flatten().tolist()
+            aj += numpy.outer(numpy.ones_like(E), E).flatten().tolist()
+            aa += Ae.flatten().tolist()
+        bcidx = numpy.where(bcmask)[0].tolist()
+        ai += bcidx
+        aj += bcidx
+        aa += numpy.ones_like(bcidx).tolist()
+        A = sp.csr_matrix((aa, (ai, aj)), shape=(Ndof,Ndof))
+        if spy:
+            pyplot.spy(A)
+        return A
+    
+    u0 = numpy.zeros(Ndof) # initial guess
+    u, nit = fsolve_newton(residual, jacobian, u0, verbose=True)
+    return x, u
+
