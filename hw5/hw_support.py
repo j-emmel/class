@@ -261,7 +261,7 @@ class fe2tri:
         return V, dV
 
     
-def fe2_solve(fe, mesh, form, dirichlet={}, spy=False):
+def fe2_solve(fe, mesh, form, dirichlet={}, spy=False, verbose=False):
     x, Erestrict = mesh.Erestrict(fe.p)
     Frestrict = mesh.Frestrict(fe.p)
     Ndof = len(x)
@@ -323,6 +323,6 @@ def fe2_solve(fe, mesh, form, dirichlet={}, spy=False):
         return A
     
     u0 = numpy.zeros(Ndof) # initial guess
-    u, nit = fsolve_newton(residual, jacobian, u0, verbose=True)
+    u, nit = fsolve_newton(residual, jacobian, u0, verbose=verbose)
     return x, u
 
