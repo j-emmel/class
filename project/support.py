@@ -64,6 +64,22 @@ def limit_vl(r):
 def limit_bj(r):
     return numpy.clip(numpy.minimum(4*r, 4*(1-r)), 0, 1)
 
+def fvsolve2(riemann, u0, a=-1, b=1, n=20, tfinal=1, limit=limit_minmod, t_step=None):
+    h = (b - a)/n
+    if t_step is None:
+        t_step = h/10
+    x = numpy.linspace(a+h/2, b-h/2, n) # Element midpoints (centroids)
+    idxL = numpy.arange(-1, n-1)
+    idxR = numpy.arange(1, n+1) % n
+    def rhs(t, u):
+        jump = u[idxR] - u[idxL]
+        r = numpy.zeros_like(jump)
+        numpy.divide(u - u[idxL], jump, out=r, where=(jump!=0))
+        g = limit(r) * jump / (2*h)
+        fluxL = riemann(u[idxL] + g[idxL] * h/2, u - g * h/2)
+        return (fluxL - fluxL[idxR]) / h
+    return x, ode_rkexplicit(rhs, u0(x), h=t_step, tfinal=tfinal)
+
 def fvsolve2system(riemann, U0, a=-1, b=1, n=20, tfinal=1, limit=limit_minmod, t_step = None, args = ()):
     h = (b - a)/n
     
